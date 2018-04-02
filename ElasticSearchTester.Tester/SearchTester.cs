@@ -33,11 +33,20 @@ namespace ElasticSearchTester.Tester
         [TestMethod]
         public void match()
         {
-            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName, from: 0, size: 100, query: (q) =>
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName, from: 0, size: 100, query: (q) =>
             {
                 return q.Match((qd) =>
                 {
                     return qd.Field(f => f.title).Query("牛奶");
+                });
+            }).Result;
+
+            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName, from: 0, size: 100, query: (q) =>
+            {
+                return q.Match((qd) =>
+                {
+                    // keyword 字段不计算词频(TF)
+                    return qd.Field(f => f.keyword).Query("手机");
                 });
             }).Result;
         }
@@ -53,8 +62,8 @@ namespace ElasticSearchTester.Tester
                 query: (q) =>
                     q.Match(mq => mq.Field(info => info.title)
                         .Query("华为手机")
-                        .MinimumShouldMatch(MinimumShouldMatch.Fixed(3))
-                        // .Operator(Operator.And)
+                        // .MinimumShouldMatch(MinimumShouldMatch.Fixed(3))
+                        .Operator(Operator.And)
                     )).Result;
 
             // 至少满足N项
@@ -85,6 +94,22 @@ namespace ElasticSearchTester.Tester
                         )).Query("牛奶");
                 });
             }).Result;             
+        }
+
+        /// <summary>
+        /// match_phrase: 短语匹配
+        /// </summary>
+        [TestMethod]
+        public void match_phrase()
+        {
+            // 必须包含所有的关键字，并保持顺序一致， 允许间隔3，越近，分值越高
+            // 与 match Operator.And 的 不同的是，需保持顺序
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+              query: (q) =>
+                  q.MatchPhrase(mq => mq.Field(info => info.title)
+                      .Query("华为手机").Slop(3)
+                      
+                  )).Result;
         }
 
         /// <summary>
@@ -175,6 +200,21 @@ namespace ElasticSearchTester.Tester
                 return !q.Exists((qd) =>
                 {
                     return qd.Field(info => info.keyword);
+                });
+            }).Result;
+        }
+
+        /// <summary>
+        /// prefix: 前缀匹配，匹配token的前缀
+        /// </summary>
+        [TestMethod]
+        public void prefix()
+        {
+            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName, from: 0, size: 100, query: (q) =>
+            {
+                return q.Prefix((qd) =>
+                {
+                    return qd.Field(info => info.title).Value("手");
                 });
             }).Result;
         }
@@ -315,57 +355,7 @@ namespace ElasticSearchTester.Tester
         }
 
         #endregion
-
-        #region 权重
-
-        /// <summary>
-        /// boost: 权重，按搜索词提升权重
-        /// </summary>
-        [TestMethod]
-        public void Boost1()
-        {
-            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
-                query:
-                   q => q.Match(qm => qm.Field("title").Query("手机").Boost(2.0))
-                        ||
-                        q.Match(qm => qm.Field("title").Query("华为").Boost(1.0))
-                        ).Result;
-        }
-
-        /// <summary>
-        /// boost: 权重，按字段设置权重
-        /// </summary>
-        [TestMethod]
-        public void Boost2()
-        {
-            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
-                query:
-                   q => q.Match(qm => qm.Field(info => info.title).Query("手机").Boost(2.0))
-                        ||
-                        q.Match(qm => qm.Field(info => info.spuname).Query("华为").Boost(1.0))
-                        ).Result;
-        }
-
-        /// <summary>
-        /// boost:权重，按字段设置权重，多字段搜索
-        /// </summary>
-        [TestMethod]
-        public void Boost3()
-        {
-            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
-                query:
-                   q => q.MultiMatch
-                   (
-                       md => md.Fields(fd => fd
-                            .Field(info => info.title, 2.0)
-                            .Field(info => info.spuname, 1.0))
-                            .Query("手机")
-                   )
-            ).Result;
-        }
-
-        #endregion
-
+       
         #region 多字段查询
 
         /// <summary>
@@ -415,6 +405,199 @@ namespace ElasticSearchTester.Tester
                             .Type(TextQueryType.MostFields)// 默认为 BestFields
                 )
             ).Result;
+
+            // 评分规则: 分别计算分词后的每个关键字在各个字段中的分值，每个关键字选取最大的，累加所有关键字。
+            var r3 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                       q.MultiMatch(mq =>
+                           mq.Fields(f => f
+                                .Field(info => info.title, 0.8)
+                                .Field(info => info.attachtitle, 0.3)
+                                .Field(info => info.brandname, 1)
+                                .Field(info => info.brandsname, 1)
+                                .Field(info => info.keyword, 0.8)
+                                .Field(info => info.spuname, 0.5)
+                            ).Query("手机华为4G")
+                            .Type(TextQueryType.CrossFields)
+                            .MinimumShouldMatch(MinimumShouldMatch.Percentage(100))
+                )
+            ).Result;
+        }
+
+        /// <summary>
+        /// constant_score: 规定分值，默认1
+        /// </summary>
+        [TestMethod]
+        public void 多字段3()
+        {
+             //.Field(info => info.title, 0.8)
+             //                   .Field(info => info.attachtitle, 0.3)
+             //                   .Field(info => info.brandname, 1)
+             //                   .Field(info => info.brandsname, 1)
+             //                   .Field(info => info.keyword, 0.8)
+             //                   .Field(info => info.spuname, 0.5)
+
+            // 评分规则: title 或 spuname，取分值最高的 + 其余字段 * 0.3
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                       q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.title).Boost(1).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.attachtitle).Boost(0.5).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.brandname).Boost(2).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.brandsname).Boost(2).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.keyword).Boost(1.5).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.spuname).Boost(1).Query("手机"))))
+                    || q.ConstantScore(s => s.Filter(fs => fs.Match(ms => ms.Field(info => info.sortname).Boost(2).Query("手机"))))
+                )
+            .Result;
+        }
+
+        #endregion
+
+        #region 控制评分
+
+        /// <summary>
+        /// weight: 设置权重，评分=score * weight
+        /// </summary>
+        [TestMethod]
+        public void weight()
+        {
+            // 按搜索词提升权重
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q => q.Match(qm => qm.Field("title").Query("手机").Boost(2.0))
+                        ||
+                        q.Match(qm => qm.Field("title").Query("华为").Boost(1.0))
+                        ).Result;
+
+            // 按字段设置权重
+            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q => q.Match(qm => qm.Field(info => info.title).Query("手机").Boost(2.0))
+                        ||
+                        q.Match(qm => qm.Field(info => info.spuname).Query("华为").Boost(1.0))
+                        ).Result;
+
+            // 按字段设置权重
+            var r3 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q => q.MultiMatch
+                   (
+                       md => md.Fields(fd => fd
+                            .Field(info => info.title, 2.0)
+                            .Field(info => info.spuname, 1.0))
+                            .Query("手机")
+                   )
+            ).Result;
+        }
+
+        /// <summary>
+        /// field_value_factor，按某个字段，比如价格、关注度，提升权重，FieldValueFactorModifier枚举定义分值计算类型
+        /// 参考:https://www.elastic.co/guide/cn/elasticsearch/guide/current/boosting-by-popularity.html
+        /// </summary>
+        [TestMethod]
+        public void field_value_factor()
+        {
+            // 计算 skupricemin 值的 常用对数,并累加到，最后得分中
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                   q.FunctionScore(fs => fs.Functions(func =>
+                        func.FieldValueFactor(fvf =>
+                        fvf.Field(info => info.skupricemin)
+                        .Modifier(FieldValueFactorModifier.Log1P))))
+                   &&
+                   q.Match(qm => qm.Field("title").Query("手机"))
+                   );
+
+            // 计算 skupricemin 值的 常用对数,用Query Title的分值 * skupricemin对数 = 最终得分
+            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                   q.FunctionScore(fs =>
+                        fs.Functions(func =>
+                            func.FieldValueFactor(fvf => fvf
+                                .Field(info => info.skupricemin)
+                                .Modifier(FieldValueFactorModifier.Log1P)))
+                                .Query(fq => fq.Match(fqm => fqm.Field(info => info.title).Query("手机")))
+                                )
+                   ).Result;
+
+            // 计算 skupricemin 值的 常用对数,用Query Title的分值 + skupricemin对数 = 最终得分，效果同 r1
+            var r3 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                   q.FunctionScore(fs =>
+                        fs.Functions(func =>
+                            func.FieldValueFactor(fvf => fvf
+                                .Field(info => info.skupricemin)
+                                .Modifier(FieldValueFactorModifier.Log1P)))
+                                .Query(fq => fq.Match(fqm => fqm.Field(info => info.title).Query("手机")))
+                                .BoostMode(FunctionBoostMode.Sum)
+                                )
+                   ).Result;
+        }
+
+
+        [TestMethod]
+        public void Test()
+        {
+            // 计算 skupricemin 值的 常用对数,并累加到，最后得分中
+
+            var query = new QueryContainer();
+           
+            var r1 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+                query:
+                   q =>
+                   {
+                       query = query && q.Match(mq =>
+                            mq.Field(info => info.title).Query("手机"));
+
+                       var qc = q.Term(qt => qt.Field(info => info.spuid).Value(4110025))
+                            || q.Term(qt => qt.Field(info => info.spuid).Value(9054099));
+
+                       return query && qc;
+                   }
+            );
+
+            query = new QueryContainer();
+            var r2 = Proxy.SearchDocAsync<IndexDataInfo>(IndexName,
+               query:
+                  q =>
+                  {
+                      query = query && q.Match(mq =>
+                           mq.Field(info => info.title).Query("手机"));
+
+                      query = query || q.Term(qt => qt.Field(info => info.spuid).Value(4110025));
+                      query = query || q.Term(qt => qt.Field(info => info.spuid).Value(9054099));
+
+                      return query;
+                  }
+           ).Result;
+        }
+        #endregion
+
+        #region 数学计算
+
+        [TestMethod]
+        public void MathTest()
+        {
+            // 求平方根
+            System.Diagnostics.Debug.WriteLine(Math.Sqrt(100));
+
+            // 求倒数
+            System.Diagnostics.Debug.WriteLine(1/ Math.Sqrt(100));
+
+            // 求自然对数
+            System.Diagnostics.Debug.WriteLine(Math.Log(100));
+
+            // 求常用对数，以10为低
+            System.Diagnostics.Debug.WriteLine(Math.Log(100, 10));
+
+
+            // log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5))
+            System.Diagnostics.Debug.WriteLine(Math.Log(1 + (9192 - 26 + 0.5) / (26 + 0.5)));
         }
 
         #endregion

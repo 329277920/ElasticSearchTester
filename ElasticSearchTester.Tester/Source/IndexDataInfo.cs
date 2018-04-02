@@ -119,7 +119,7 @@ namespace ElasticSearchTester.Tester.Source
         }
 
         /// <summary>
-        /// 商品标题
+        /// 商品标题 
         /// </summary>      
         [Text(Index = true, Analyzer = "ik_max_word", SearchAnalyzer = "ext_ik_smart")]
         public string title
@@ -182,9 +182,9 @@ namespace ElasticSearchTester.Tester.Source
         }
 
         /// <summary>
-        /// 搜索关键词
+        /// 搜索关键词（IndexOptions = IndexOptions.Docs，禁用词频的统计,Norms = false: 禁用字段长度权重）
         /// </summary>            
-        [Text(Index = true, Analyzer = "ik_smart", SearchAnalyzer = "ext_ik_smart")]
+        [Text(Index = true, Analyzer = "ik_smart", SearchAnalyzer = "ext_ik_smart", IndexOptions = IndexOptions.Docs, Norms = false)]
         public string keyword
         {
             get; set;
